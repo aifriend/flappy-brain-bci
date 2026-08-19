@@ -1,0 +1,7 @@
+numpy
+scipy
+scikit-learn
+pylsl
+matplotlib
+pytest
+pygame-ce  # provides the `pygame` module; stock pygame 2.6.1 fonts are broken on Python 3.14

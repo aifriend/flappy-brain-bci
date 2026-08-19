@@ -1,0 +1,19 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local run artifacts (calibration data, trained models, session logs)
+data/
+model*.pkl
+model*_arrays.npz
+demo_listener.log
+
+# Demo screenshots (regenerable; docs/ keeps the curated ones)
+docs/mock_frames/
+csp_features.png
+features.png
+
+# OS
+.DS_Store
