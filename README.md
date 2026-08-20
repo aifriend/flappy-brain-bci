@@ -48,12 +48,15 @@ flappy_brain/           the package
   online.py             sliding-window inference, smoothing, threshold + refractory, SessionLogger
   monitor.py            live dashboard (MonitorState data logic + LiveMonitor figure)
   output_udp.py         UDP flap sender ("1" to host:port)
+  pilot.py              closed-loop demo controller (state parse, bang-bang/pulse modes)
   simulate.py           fake LSL EEG outlet; ch2/3 left motor, ch4 Cz, ch5/6 right motor
 scripts/
   calibrate.py          record a cued calibration session (--scheme, --simulate)
   train.py              train + evaluate + export model
   play.py               live loop: LSL -> classifier -> UDP flaps (--monitor, --arrays, --log)
+  pilot.py              simulated pilot: game state -> brain state (closed-loop demo)
   mock_game.py          pygame demo game speaking the game's UDP protocol
+  sweep.py              headless decoder-hyperparameter sweep against game score
 tests/                  unit tests + simulated end-to-end test
 docs/                   screenshots (dashboard, mock game)
 data/                   calibration .npz + session logs (gitignored)
@@ -86,20 +89,110 @@ everyone trains their own):
 .venv/bin/python scripts/train.py --data data/calib_<timestamp>.npz
 ```
 
-Then two terminals — start the game first so no flap packets are missed:
+**One-command demo** (recommended): launches the closed-loop stack —
+simulated pilot (the "brain"), the classifier, and the mock game — with the
+tuned flags, correct startup order, port checks, and Ctrl-C cleanup:
 
 ```bash
-# terminal 1 — the mock game
-.venv/bin/python scripts/mock_game.py
-
-# terminal 2 — the BCI pipeline with live dashboard
-.venv/bin/python scripts/play.py --simulate --monitor
+scripts/run_demo.sh                  # live windows (game + monitor)
+scripts/run_demo.sh --headless       # no windows (CI / SSH)
+scripts/run_demo.sh --duration 60    # auto-stop after N s
 ```
 
-The simulator cycles rest → LEFT → rest → RIGHT (4 s each); flaps should
-arrive only during RIGHT phases and the bird should flap in the game window.
+Or run the stages by hand — two terminals. For a **playable** demo (bird
+stays airborne), use the tuned combo below — gentler game physics, calmer
+terrain, and a simulator cycle with a long RIGHT (flap) phase and short
+dive phases. Start the pipeline first so the game doesn't idle unflapped
+during startup:
+
+```bash
+# terminal 1 — the BCI pipeline with live dashboard (starts first)
+.venv/bin/python scripts/play.py --simulate --monitor \
+    --sim-rest 1.0 --sim-left 1.2 --sim-right 8 \
+    --refractory 2.0 --window 0.75 --threshold 0.75
+
+# terminal 2 — the mock game (start ~3 s later)
+.venv/bin/python scripts/mock_game.py --gravity 10 --flap-force 18 --terrain-scale 0.5
+```
+
+Verified headless on three seeds: bird survives full 38 s runs with zero
+game-overs, scoring 1–6 points. The simulator cycle flags (`--sim-rest`,
+`--sim-left`, `--sim-right`, `--sim-feet`) tune the scripted phases;
+`--terrain-scale` flattens the hills as a demo assist (default 1.0 keeps the
+hilly terrain). Without these, the default physics (gravity 1800) need ~2
+flaps/s while the default 16 s cycle only flaps during 4 s of RIGHT — the
+bird dies almost instantly, which is expected, not a classifier bug.
+
 Use `--scheme feetrest` on all three commands for the REST/FEET variant
-(cycle rest → FEET).
+(cycle rest → FEET). For the more impressive **closed-loop** demo (a
+simulated pilot that actually watches the bird), see the next section.
+
+## Closed-loop simulated pilot (recommended demo)
+
+The scripted demo above is **open-loop**: the brain cycles on a timer, whether
+the bird needs a flap or not. `scripts/pilot.py` closes the loop — a
+simulated pilot watches the game's state and produces RIGHT imagery only when
+the bird should climb, so the *real* pipeline (simulated EEG → LSL →
+`play.py` classifier → UDP flaps → game) plays with realistic classifier
+latency and noise. Three processes:
+
+```bash
+# terminal 1 — the brain (simulated EEG driven by game state)
+.venv/bin/python scripts/pilot.py --state-port 5006
+
+# terminal 2 — the decoder (NO --simulate: it resolves the pilot's stream)
+.venv/bin/python scripts/play.py --monitor \
+    --window 0.75 --threshold 0.55 --smoothing 0.5 --refractory 1.0
+
+# terminal 3 — the game (start last, ~5 s after the decoder, with state broadcast)
+.venv/bin/python scripts/mock_game.py --state-broadcast 5006 \
+    --gravity 100 --flap-force 150 --terrain-scale 0.5
+```
+
+The game broadcasts a v2 CSV packet per frame to the pilot:
+
+```
+t,bird_y,bird_vy,corridor_center_y,score,alive,green_dx,green_dy,red_dx,red_dy
+```
+
+(`*_dx/dy` = nearest on-screen green/red neuron ahead of the bird, relative
+to the bird; `9999` when none. Old 6-field v1 packets are still accepted.)
+
+The pilot's controller (in `flappy_brain/pilot.py`) tracks a desired
+altitude: the nearest green neuron's height when one is ahead within a ±90 px
+chase band around the corridor center (bigger excursions end in terrain at
+this latency), dodged around any red neuron sitting near the path, else the
+corridor center. It emits a short climb-intent pulse when the predicted bird
+position (velocity lead) dips below the target (deadband; screen y grows
+downward), and — importantly for the leftright scheme — holds LEFT imagery
+as the "sink" state, which keeps P(RIGHT) pinned near 0 far more reliably
+than unmodeled rest (measured: near-zero false flaps, vs several per minute
+with rest).
+
+Measured headless (classifier latency ~1 s included, 60 s games):
+
+- default physics (gravity 1800) + full hills: 41 game-overs in 60 s — a ~1 s
+  classifier lag means the bird falls 900+ px before a flap lands; closed
+  loop cannot fix that, as with a human reacting too slowly;
+- moderate physics (gravity 100) + `--terrain-scale 0.5`, tuned decoder
+  (window 0.75 / threshold 0.55 / smoothing 0.5 / refractory 1.0), three
+  seeds: scores 2 / 5 / 7, 3 game-overs each, best lives 23.8–26.9 s.
+  Compare the open-loop scripted demo, which needed gravity 10 + calm
+  terrain to survive — the closed loop tolerates ~10× the gravity.
+
+### Tuning against game score
+
+`scripts/sweep.py` runs the whole loop headless over a trimmed grid of
+decoder settings (window × threshold × smoothing × refractory) with a fixed
+game seed and prints a score/game-over table — use it to re-tune after
+changing the pilot, physics, or model:
+
+```bash
+MPLBACKEND=Agg SDL_VIDEODRIVER=dummy .venv/bin/python scripts/sweep.py \
+    --game-seconds 35 --seed 7
+```
+
+The recommended combo in the commands above came from such a sweep.
 
 ## Game-day runbook (Windows PC + NeuroCONCISE)
 
@@ -195,7 +288,10 @@ UDP flap packets (`"1"` on `127.0.0.1:5005`) as the real Unity game — the
 classifier can fly a bird without Windows. Green neurons = +1, red
 neurons = −1, hilly terrain kills on contact (auto-restart). Settings mirror
 the Unity game (`--flap-force`, `--gravity`, `--time-limit`,
-`--spawn-interval`, `--spawn-jitter`, `--seed`).
+`--spawn-interval`, `--spawn-jitter`, `--seed`); `--terrain-scale` (default
+1.0) flattens the hills as a demo assist. Game-overs are logged with cause
+(top/bottom terrain, altitude, corridor) and the exit line reports cumulative
+score, best single-life time, game-over count, and UDP flaps received.
 
 ![mock game](docs/mock_game.png)
 

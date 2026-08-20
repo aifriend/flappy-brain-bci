@@ -49,9 +49,13 @@ RED = (215, 80, 80)
 INK = (45, 62, 72)
 
 
-def corridor_center(world_x: float) -> float:
-    """Middle of the flyable gap at a world x position (fixed terrain shape)."""
-    return HEIGHT / 2 + 80 * math.sin(world_x * 0.003) + 40 * math.sin(world_x * 0.007 + 1.0)
+def corridor_center(world_x: float, scale: float = 1.0) -> float:
+    """Middle of the flyable gap at a world x position (fixed terrain shape).
+
+    ``scale`` flattens the hills (< 1.0) — a demo assist for open-loop
+    (scripted-classifier) flight, where no one closes the altitude loop.
+    """
+    return HEIGHT / 2 + scale * (80 * math.sin(world_x * 0.003) + 40 * math.sin(world_x * 0.007 + 1.0))
 
 
 class Neuron:
@@ -75,6 +79,7 @@ class Game:
         spawn_interval: float = SPAWN_INTERVAL,
         spawn_jitter: float = SPAWN_JITTER,
         time_limit: float | None = TIME_LIMIT,
+        terrain_scale: float = 1.0,
     ):
         self.auto = auto
         self.flap_force = flap_force
@@ -82,6 +87,7 @@ class Game:
         self.spawn_interval = spawn_interval
         self.spawn_jitter = spawn_jitter
         self.time_limit = time_limit
+        self.terrain_scale = terrain_scale
         self.rng = random.Random(seed)
 
         self._udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -90,13 +96,16 @@ class Game:
         self._udp.setblocking(False)
 
         self.flap_packets = 0  # total UDP flaps received (all runs)
+        self.total_deaths = 0
+        self.total_score = 0  # cumulative across auto-restarts
+        self.best_stretch = 0.0  # longest single life, seconds
         self._queued_flaps = 0
         self._font = None
         self.reset()
 
     # ---------------------------------------------------------------- state
     def reset(self) -> None:
-        self.y = HEIGHT / 2
+        self.y = corridor_center(BIRD_X, self.terrain_scale)  # spawn inside the gap
         self.vy = 0.0
         self.world_x = 0.0
         self.elapsed = 0.0
@@ -115,7 +124,7 @@ class Game:
         return self.world_x + BIRD_X
 
     def corridor(self, world_x: float) -> tuple[float, float]:
-        c = corridor_center(world_x)
+        c = corridor_center(world_x, self.terrain_scale)
         return c - CORRIDOR_HALF, c + CORRIDOR_HALF  # (top, bottom)
 
     # ---------------------------------------------------------------- input
@@ -192,12 +201,48 @@ class Game:
         if self.y - BIRD_R < top or self.y + BIRD_R > bottom:
             self.game_over = True
             self._dead_timer = 0.0
+            self.total_deaths += 1
+            self.total_score += self.score
+            self.best_stretch = max(self.best_stretch, self.elapsed)
+            where = "top" if self.y - BIRD_R < top else "bottom"
+            print(
+                f"[game] game over at t={self.elapsed:.1f}s (hit {where} terrain: "
+                f"y={self.y:.0f}, corridor {top:.0f}..{bottom:.0f}, score {self.score})",
+                flush=True,
+            )
 
         # time limit
         if self.time_limit is not None and self.elapsed >= self.time_limit:
             self.finished = True
 
     # ----------------------------------------------------------------- draw
+    def state_packet(self, t: float) -> str:
+        """State broadcast packet (CSV, v2):
+
+        ``t,bird_y,bird_vy,corridor_center_y,score,alive,green_dx,green_dy,red_dx,red_dy``
+
+        ``*_dx/dy`` are the nearest on-screen green/red neuron AHEAD of the
+        bird, relative to the bird; 9999 when none. v1 (6-field) packets are
+        still accepted by the pilot.
+        """
+        top, bottom = self.corridor(self.bird_world_x)
+        fields = [
+            f"{t:.3f}",
+            f"{self.y:.1f}",
+            f"{self.vy:.1f}",
+            f"{(top + bottom) / 2:.1f}",
+            str(self.total_score + self.score),
+            str(int(not self.game_over and not self.finished)),
+        ]
+        for kind in ("green", "red"):
+            ahead = [n for n in self.neurons if n.kind == kind and n.x > BIRD_X]
+            if ahead:
+                n = min(ahead, key=lambda n: n.x)
+                fields += [f"{n.x - BIRD_X:.0f}", f"{n.y - self.y:.0f}"]
+            else:
+                fields += ["9999", "9999"]
+        return ",".join(fields)
+
     def draw(self, surface) -> None:
         import pygame
 
@@ -261,6 +306,12 @@ def main() -> None:
     ap.add_argument("--gravity", type=float, default=GRAVITY)
     ap.add_argument("--spawn-interval", type=float, default=SPAWN_INTERVAL)
     ap.add_argument("--spawn-jitter", type=float, default=SPAWN_JITTER)
+    ap.add_argument("--terrain-scale", type=float, default=1.0,
+                    help="flatten the hills (<1.0); demo assist for open-loop scripted flight")
+    ap.add_argument("--state-broadcast", type=int, default=None, metavar="PORT",
+                    help="send game state each frame via UDP to 127.0.0.1:PORT as "
+                         "'t,bird_y,bird_vy,corridor_center_y,score,alive,"
+                         "green_dx,green_dy,red_dx,red_dy' (CSV; for pilot.py)")
     args = ap.parse_args()
 
     import pygame
@@ -282,6 +333,7 @@ def main() -> None:
         spawn_interval=args.spawn_interval,
         spawn_jitter=args.spawn_jitter,
         time_limit=args.time_limit,
+        terrain_scale=args.terrain_scale,
     )
     print(
         f"[game] listening for flaps on {args.host}:{args.port}"
@@ -291,6 +343,12 @@ def main() -> None:
     frame = 0
     elapsed_wall = 0.0
     running = True
+    state_sock = None
+    if args.state_broadcast:
+        state_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        print(f"[game] broadcasting state to 127.0.0.1:{args.state_broadcast} "
+              "(t,bird_y,bird_vy,corridor_center_y,score,alive,"
+              "green_dx,green_dy,red_dx,red_dy)")
     while running:
         dt = min(clock.tick(FPS) / 1000.0, 0.05)
         elapsed_wall += dt
@@ -307,6 +365,11 @@ def main() -> None:
 
         game.poll_udp()
         game.step(dt)
+
+        if state_sock is not None:
+            state_sock.sendto(game.state_packet(elapsed_wall).encode(),
+                              ("127.0.0.1", args.state_broadcast))
+
         game.draw(surface)
         pygame.display.flip()
 
@@ -317,8 +380,10 @@ def main() -> None:
             break
 
     print(
-        f"[game] done: score {game.score}, {game.flap_packets} UDP flap packets received, "
-        f"{frame} frames"
+        f"[game] done: score {game.total_score + game.score} "
+        f"(best life {max(game.best_stretch, game.elapsed):.1f}s), "
+        f"{game.total_deaths} game-over(s), "
+        f"{game.flap_packets} UDP flap packets received, {frame} frames"
     )
     game.close()
     pygame.quit()

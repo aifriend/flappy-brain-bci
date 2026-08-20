@@ -55,6 +55,8 @@ class SimulatedEEGSource:
         right_motor=RIGHT_MOTOR,
         rest_duration: float = 4.0,
         imagery_duration: float = 4.0,
+        left_duration: float | None = None,
+        right_duration: float | None = None,
         scripted: bool = True,
         erd_depth: float = 0.15,
         seed: int = 0,
@@ -69,6 +71,9 @@ class SimulatedEEGSource:
         self.right_motor = list(right_motor)
         self.rest_duration = rest_duration
         self.imagery_duration = imagery_duration
+        # leftright scripted cycle may use asymmetric phase durations
+        self.left_duration = left_duration if left_duration is not None else imagery_duration
+        self.right_duration = right_duration if right_duration is not None else imagery_duration
         self.scripted = scripted
         self.erd_depth = erd_depth
         self._rng = np.random.default_rng(seed)
@@ -86,6 +91,11 @@ class SimulatedEEGSource:
         self._beta_phase = {g: self._rng.uniform(0, 2 * np.pi, len(c)) for g, c in self._groups}
 
     # ------------------------------------------------------------- state
+    @property
+    def state(self) -> str:
+        """Current brain state (manual mode) / base state."""
+        return self._state
+
     def set_state(self, state: str) -> None:
         """Manual mode: force the imagery state (must belong to the scheme)."""
         if state not in SCHEME_STATES[self.scheme]:
@@ -102,12 +112,13 @@ class SimulatedEEGSource:
         r, i = self.rest_duration, self.imagery_duration
         if self.scheme == "feetrest":
             return "rest" if (t % (r + i)) < r else "feet"
-        phase = t % (2 * r + 2 * i)
+        l, rr = self.left_duration, self.right_duration
+        phase = t % (2 * r + l + rr)
         if phase < r:
             return "rest"
-        if phase < r + i:
+        if phase < r + l:
             return "left"
-        if phase < 2 * r + i:
+        if phase < 2 * r + l:
             return "rest"
         return "right"
 

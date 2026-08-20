@@ -116,3 +116,19 @@ def test_feetrest_scripted_cycle_flaps_only_in_feet():
     # and there must be flaps squarely inside each FEET phase
     for a, b in feet_intervals:
         assert any(a + 0.2 <= t <= b for t in flap_times), f"no flaps inside FEET [{a}, {b}]"
+
+
+def test_scripted_cycle_custom_durations():
+    """--sim-rest/--sim-left/--sim-right wire through to the scripted cycle."""
+    src = SimulatedEEGSource(scripted=True, rest_duration=1.0, left_duration=2.0,
+                             right_duration=3.0)
+    # cycle: rest [0,1) LEFT [1,3) rest [3,4) RIGHT [4,7), repeat
+    assert src.state_at(0.5) == "rest"
+    assert src.state_at(1.5) == "left"
+    assert src.state_at(3.5) == "rest"
+    assert src.state_at(4.5) == "right"
+    assert src.state_at(7.5) == "rest"  # wraps around
+    # defaults unchanged: symmetric 4 s phases
+    default = SimulatedEEGSource(scripted=True)
+    assert default.left_duration == default.right_duration == 4.0
+    assert default.state_at(5.0) == "left" and default.state_at(13.0) == "right"

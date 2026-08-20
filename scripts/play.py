@@ -46,6 +46,14 @@ def main() -> None:
     ap.add_argument("--scheme", choices=list(SCHEMES), default="leftright",
                     help="scripted simulator cycle with --simulate (default leftright); "
                          "warns if the model was trained for another scheme")
+    ap.add_argument("--sim-rest", type=float, default=4.0,
+                    help="scripted cycle: rest phase in s (default 4)")
+    ap.add_argument("--sim-left", type=float, default=4.0,
+                    help="scripted cycle (leftright): LEFT phase in s (default 4)")
+    ap.add_argument("--sim-right", type=float, default=4.0,
+                    help="scripted cycle (leftright): RIGHT phase in s (default 4)")
+    ap.add_argument("--sim-feet", type=float, default=4.0,
+                    help="scripted cycle (feetrest): FEET phase in s (default 4)")
     ap.add_argument("--monitor", action="store_true", help="show live dashboard (EEG + P(RIGHT) + flaps)")
     ap.add_argument("--monitor-channels", type=int, default=4, help="EEG channels shown in the monitor (default 4)")
     args = ap.parse_args()
@@ -53,7 +61,14 @@ def main() -> None:
     stop_sim = None
     stream_name = args.stream_name
     if args.simulate:
-        source = simulate.SimulatedEEGSource(scripted=True, scheme=args.scheme)
+        source = simulate.SimulatedEEGSource(
+            scripted=True,
+            scheme=args.scheme,
+            rest_duration=args.sim_rest,
+            imagery_duration=args.sim_feet,
+            left_duration=args.sim_left,
+            right_duration=args.sim_right,
+        )
         stop_sim = threading.Event()
         threading.Thread(
             target=simulate.run_outlet, args=(source,), kwargs={"stop_event": stop_sim}, daemon=True
@@ -63,8 +78,8 @@ def main() -> None:
             cycle = f"{source.rest_duration}s rest / {source.imagery_duration}s FEET"
         else:
             cycle = (
-                f"{source.rest_duration}s rest / {source.imagery_duration}s LEFT / "
-                f"{source.rest_duration}s rest / {source.imagery_duration}s RIGHT"
+                f"{source.rest_duration}s rest / {source.left_duration}s LEFT / "
+                f"{source.rest_duration}s rest / {source.right_duration}s RIGHT"
             )
         print(f"[play] simulator cycle: {cycle} (flaps expected only during the imagery phase)")
 
