@@ -1,7 +1,6 @@
-numpy
-scipy
-scikit-learn
-pylsl
-matplotlib
-pytest
-pygame-ce  # provides the `pygame` module; stock pygame 2.6.1 fonts are broken on Python 3.14
+numpy>=1.26
+scipy>=1.11
+scikit-learn>=1.3
+pylsl>=1.16
+matplotlib>=3.7
+pygame-ce>=2.4  # provides the `pygame` module; stock pygame 2.6.1 fonts are broken on Python 3.14
