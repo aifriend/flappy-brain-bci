@@ -1,6 +1,7 @@
 """Session log tests: header, row counts, integration with run_online (fakes)."""
 
 import numpy as np
+import pylsl
 
 from flappy_brain.online import SessionLogger, run_online
 
@@ -10,7 +11,8 @@ class FakeBuffer:
 
     def get_last(self, n_samples):
         data = np.random.default_rng(0).standard_normal((n_samples, 8))
-        return data, np.arange(n_samples) / self.fs
+        # stamped "now" so the stale-stream guard in run_online treats it as live
+        return data, pylsl.local_clock() - np.arange(n_samples)[::-1] / self.fs
 
 
 class FakeModel:

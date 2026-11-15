@@ -63,7 +63,7 @@ def run_combo(idx, combo, game_s, seed, logdir):
              "--window", str(window), "--threshold", str(threshold),
              "--smoothing", str(smoothing), "--refractory", str(refractory)],
             cwd=ROOT, stdout=open(logdir / f"{tag}_play.log", "w"),
-            stderr=subprocess.STDOUT, env={"MPLBACKEND": "Agg", **__import__("os").environ}))
+            stderr=subprocess.STDOUT, env={**__import__("os").environ, "MPLBACKEND": "Agg"}))
         time.sleep(4.0)
         game_log = logdir / f"{tag}_game.log"
         game = subprocess.Popen(
@@ -71,7 +71,7 @@ def run_combo(idx, combo, game_s, seed, logdir):
              "--seed", str(seed), "--port", str(flap_port),
              "--state-broadcast", str(state_port)] + GAME_ARGS,
             cwd=ROOT, stdout=open(game_log, "w"), stderr=subprocess.STDOUT,
-            env={"SDL_VIDEODRIVER": "dummy", **__import__("os").environ})
+            env={**__import__("os").environ, "SDL_VIDEODRIVER": "dummy"})
         game.wait()
         for p in procs:
             p.wait()

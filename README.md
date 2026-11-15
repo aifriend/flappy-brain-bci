@@ -68,11 +68,12 @@ Requires Python 3.10+.
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -r requirements.txt       # runtime
+.venv/bin/pip install -r requirements-dev.txt   # runtime + pytest
 ```
 
-Dependencies: numpy, scipy, scikit-learn, pylsl, matplotlib, pygame-ce,
-pytest. Notes:
+Dependencies: numpy, scipy, scikit-learn, pylsl, matplotlib, pygame-ce
+(plus pytest in `requirements-dev.txt`). Notes:
 
 - `pylsl` ships prebuilt wheels (bundled liblsl) for macOS/Linux/Windows.
 - We depend on **`pygame-ce`** (drop-in `pygame` replacement, prebuilt
