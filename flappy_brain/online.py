@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+import pylsl
 
 from . import model as model_mod
 from .lsl_input import EEGBuffer
@@ -70,6 +71,8 @@ def run_online(
     observer=None,
     logger: SessionLogger | None = None,
     verbose: bool = True,
+    stale_s: float | None = 1.0,
+    clock=pylsl.local_clock,
 ) -> dict:
     """Run the classify-and-flap loop until Ctrl-C or ``duration`` seconds.
 
@@ -79,6 +82,11 @@ def run_online(
     classified window with an 8–30 Hz filtered ``(n_samples, n_channels)``
     window — e.g. ``LiveMonitor.update``. If it returns ``False`` the loop
     stops (used when the monitor window is closed).
+    ``stale_s``: if the newest buffered sample is older than this many seconds
+    (the stream stalled or dropped), the window is skipped instead of being
+    re-classified, and smoothing restarts when data resumes. ``None`` disables
+    the check; it is also skipped when the buffer supplies no timestamps.
+    ``clock`` returns the current time in the buffer's timestamp domain.
     ``logger`` receives one row per classified window (see :class:`SessionLogger`).
     Returns ``{"windows": n_windows, "flaps": n_flaps}``.
     """
@@ -104,9 +112,21 @@ def run_online(
             if delay > 0:
                 time.sleep(delay)
 
-            data, _ = buffer.get_last(win)
+            data, ts = buffer.get_last(win)
             if data.shape[0] < win:
                 continue  # buffer still filling
+            if (
+                stale_s is not None
+                and ts is not None
+                and len(ts)
+                and clock() - float(ts[-1]) > stale_s
+            ):
+                # Stream stalled: the buffer only holds old samples. Re-classifying
+                # them could keep firing flaps, so skip and restart smoothing.
+                p_smooth = None
+                if duration is not None and time.monotonic() - start >= duration:
+                    break
+                continue
             X = data.T[None, :, :]  # raw (1, n_channels, n_samples); model filters
             p = float(model.predict_proba(X)[0, right_col])
             p_smooth = p if p_smooth is None else smoothing * p + (1 - smoothing) * p_smooth

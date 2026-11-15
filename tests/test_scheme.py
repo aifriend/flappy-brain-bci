@@ -4,6 +4,7 @@ scheme metadata round-trip, mismatch warning."""
 import numpy as np
 
 from flappy_brain.model import (
+    LABEL_RIGHT,
     cross_validate_report,
     export_arrays,
     load_model,
@@ -132,3 +133,56 @@ def test_scripted_cycle_custom_durations():
     default = SimulatedEEGSource(scripted=True)
     assert default.left_duration == default.right_duration == 4.0
     assert default.state_at(5.0) == "left" and default.state_at(13.0) == "right"
+
+
+class _StaleBuffer:
+    """Always returns the same full window, stamped ``age_s`` seconds in the past."""
+
+    fs = FS
+
+    def __init__(self, data, age_s):
+        self.data = data
+        self.age_s = age_s
+
+    def get_last(self, n_samples):
+        n = min(n_samples, len(self.data))
+        ts = np.arange(n) / self.fs + (1000.0 - self.age_s - n / self.fs)
+        return self.data[-n:], ts
+
+
+class _AlwaysFlapModel:
+    classes_ = np.array([0, LABEL_RIGHT])
+
+    def predict_proba(self, X):
+        return np.array([[0.0, 1.0]])
+
+
+def _run_stale_case(age_s):
+    sender = _CountSender()
+    stats = run_online(
+        _StaleBuffer(np.zeros((int(FS), 2)), age_s),
+        _AlwaysFlapModel(),
+        sender,
+        window_s=0.5,
+        step_s=0.02,
+        threshold=0.5,
+        refractory_s=0.0,
+        duration=0.3,
+        verbose=False,
+        stale_s=1.0,
+        clock=lambda: 1000.0,
+    )
+    return stats, sender
+
+
+def test_fresh_stream_flaps():
+    stats, sender = _run_stale_case(age_s=0.0)
+    assert stats["windows"] > 0
+    assert sender.sent > 0
+
+
+def test_stale_stream_does_not_flap():
+    """A stalled stream leaves old samples in the buffer; they must not keep flapping."""
+    stats, sender = _run_stale_case(age_s=5.0)
+    assert stats == {"windows": 0, "flaps": 0}
+    assert sender.sent == 0
