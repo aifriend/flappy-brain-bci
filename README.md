@@ -32,7 +32,7 @@ the whole loop runs on macOS/Linux with zero hardware.
   needs only numpy + scipy (no pickle, no scikit-learn).
 - **Session logging** — per-window CSV logs (probability, smoothed
   probability, flap flag) for post-hoc tuning and retraining.
-- **Tested** — 30 tests including a full simulated LSL→classifier→UDP
+- **Tested** — a unit-test suite including a full simulated LSL→classifier→UDP
   end-to-end run.
 
 ## Repository layout
@@ -328,7 +328,7 @@ tuning and as extra (labeled-by-behavior) data for retraining.
 MPLBACKEND=Agg SDL_VIDEODRIVER=dummy .venv/bin/python -m pytest tests/ -q
 ```
 
-30 tests: CSP, preprocessing, filter-bank, arrays-export equivalence, session
+The suite covers CSP, preprocessing, filter-bank, arrays-export equivalence, session
 logging, monitor data logic, mock-game mechanics, scheme handling, and a full
 simulated end-to-end test (simulated LSL stream → calibration → training →
 online loop → UDP flaps at a listener, flaps asserted inside the scripted
