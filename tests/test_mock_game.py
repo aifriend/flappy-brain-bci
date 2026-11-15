@@ -1,4 +1,4 @@
-"""Mock game tests — headless (SDL dummy), real UDP on 127.0.0.1:5005."""
+"""Mock game tests — headless (SDL dummy), real UDP on an OS-assigned loopback port."""
 
 import os
 import socket
@@ -16,12 +16,13 @@ DT = 1.0 / 60
 
 
 def test_udp_flap_packet_causes_flap():
-    game = Game()  # binds 127.0.0.1:5005
+    game = Game(port=0)  # OS picks a free UDP port
+    port = game._udp.getsockname()[1]
     try:
         game.y, game.vy = 300.0, 0.0
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.sendto(b"1", ("127.0.0.1", 5005))
-        sock.sendto(b"garbage", ("127.0.0.1", 5005))  # ignored
+        sock.sendto(b"1", ("127.0.0.1", port))
+        sock.sendto(b"garbage", ("127.0.0.1", port))  # ignored
         sock.close()
         import time
 
